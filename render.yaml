@@ -1,7 +1,0 @@
-services:
-  - type: web
-    name: boom1000-bot
-    env: python
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: python main.py
-    plan: free
