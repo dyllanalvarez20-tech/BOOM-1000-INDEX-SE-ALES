@@ -21,6 +21,7 @@ class BOOM1000CandleAnalyzer:
         self.ws = None
         self.connected = False
         self.authenticated = False
+        self.last_reconnect_time = time.time()
 
         # --- Configuración de Telegram ---
         self.telegram_token = telegram_token
@@ -30,7 +31,7 @@ class BOOM1000CandleAnalyzer:
         # --- Configuración de Trading ---
         self.symbol = "BOOM1000"
         self.candle_interval_seconds = 60
-        self.min_candles = 1
+        self.min_candles = 50
 
         # --- Parámetros de la Estrategia ---
         self.ema_fast_period = 9
@@ -156,20 +157,38 @@ class BOOM1000CandleAnalyzer:
     # --- Métodos de Conexión ---
     def connect(self):
         print("🌐 Conectando a Deriv API...")
-        self.ws = websocket.WebSocketApp(
-            self.ws_url,
-            on_open=self.on_open,
-            on_message=self.on_message,
-            on_error=self.on_error,
-            on_close=self.on_close
-        )
-        wst = threading.Thread(target=self.ws.run_forever, kwargs={
-            'sslopt': {"cert_reqs": ssl.CERT_NONE}, 'ping_interval': 30, 'ping_timeout': 10
-        })
-        wst.daemon = True
-        wst.start()
-        time.sleep(5)
-        return self.connected
+        try:
+            self.ws = websocket.WebSocketApp(
+                self.ws_url,
+                on_open=self.on_open,
+                on_message=self.on_message,
+                on_error=self.on_error,
+                on_close=self.on_close
+            )
+            wst = threading.Thread(target=self.ws.run_forever, kwargs={
+                'sslopt': {"cert_reqs": ssl.CERT_NONE}, 'ping_interval': 30, 'ping_timeout': 10
+            })
+            wst.daemon = True
+            wst.start()
+            
+            # Esperar a que se conecte
+            timeout = 10
+            start_time = time.time()
+            while not self.connected and time.time() - start_time < timeout:
+                time.sleep(0.1)
+                
+            return self.connected
+        except Exception as e:
+            print(f"❌ Error en conexión: {e}")
+            return False
+
+    def disconnect(self):
+        """Cierra la conexión WebSocket"""
+        if self.ws:
+            self.ws.close()
+            self.connected = False
+            self.authenticated = False
+            print("🔌 Conexión cerrada manualmente")
 
     def on_open(self, ws):
         print("✅ Conexión abierta")
@@ -263,7 +282,7 @@ class BOOM1000CandleAnalyzer:
             return
 
         # Verificar si tenemos suficientes datos para análisis
-        if np.isnan(ema_fast[-1]) or np.isnan(ema_slow[-1]) or np.isnan(rsi[-1]) or np.isnan(atr[-1]):
+        if len(closes) < self.ema_trend_period or np.isnan(ema_fast[-1]) or np.isnan(ema_slow[-1]) or np.isnan(rsi[-1]) or np.isnan(atr[-1]):
             return
 
         last_close = closes[-1]
@@ -279,12 +298,12 @@ class BOOM1000CandleAnalyzer:
             return
 
         # Señal de COMPRA (BUY)
-        if is_uptrend and ema_fast[-2] <= ema_slow[-2] and ema_fast[-1] > ema_slow[-1]:
+        if is_uptrend and len(ema_fast) > 1 and ema_fast[-2] <= ema_slow[-2] and ema_fast[-1] > ema_slow[-1]:
             if rsi[-1] > 40 and rsi[-1] < 70:
                 signal = "BUY"
 
         # Señal de VENTA (SELL)
-        if is_downtrend and ema_fast[-2] >= ema_slow[-2] and ema_fast[-1] < ema_slow[-1]:
+        if is_downtrend and len(ema_fast) > 1 and ema_fast[-2] >= ema_slow[-2] and ema_fast[-1] < ema_slow[-1]:
             if rsi[-1] < 60 and rsi[-1] > 30:
                 signal = "SELL"
 
@@ -374,17 +393,44 @@ class BOOM1000CandleAnalyzer:
 
         print("="*60)
 
-        if self.connect():
+        # Bucle principal con reconexión automática
+        reconnect_interval = 15 * 60  # 15 minutos en segundos
+        
+        while True:
             try:
-                while self.connected:
-                    if self.new_candle_ready:
-                        self.analyze_market()
-                        self.new_candle_ready = False
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                print("\n🛑 Deteniendo analizador...")
-        else:
-            print("❌ No se pudo conectar a Deriv")
+                current_time = time.time()
+                
+                # Reconectar cada 15 minutos o si no está conectado
+                if not self.connected or current_time - self.last_reconnect_time >= reconnect_interval:
+                    if self.connected:
+                        print("🔄 Reconexión programada (cada 15 minutos)...")
+                        self.disconnect()
+                        time.sleep(2)
+                    
+                    self.last_reconnect_time = current_time
+                    
+                    if self.connect():
+                        print("✅ Reconexión exitosa")
+                        # Bucle de análisis mientras esté conectado
+                        while self.connected:
+                            if self.new_candle_ready:
+                                self.analyze_market()
+                                self.new_candle_ready = False
+                            time.sleep(1)
+                    else:
+                        print("❌ No se pudo conectar, reintentando en 30 segundos...")
+                        time.sleep(30)
+                else:
+                    # Esperar hasta que sea tiempo de reconectar
+                    time_until_reconnect = reconnect_interval - (current_time - self.last_reconnect_time)
+                    if time_until_reconnect > 0:
+                        print(f"⏰ Próxima reconexión en {time_until_reconnect/60:.1f} minutos")
+                        time.sleep(min(60, time_until_reconnect))  # Esperar máximo 1 minuto
+                    
+            except Exception as e:
+                print(f"❌ Error crítico en run_analyzer: {e}")
+                print("🔄 Reintentando en 30 segundos...")
+                time.sleep(30)
 
 # Crear instancia global del analizador
 analyzer = None
@@ -394,13 +440,19 @@ def home():
     return jsonify({
         "status": "running",
         "service": "BOOM 1000 Analyzer",
+        "connected": analyzer.connected if analyzer else False,
         "last_signal": analyzer.last_signal if analyzer else None,
-        "total_candles": len(analyzer.candles) if analyzer else 0
+        "total_candles": len(analyzer.candles) if analyzer else 0,
+        "next_reconnect": analyzer.last_reconnect_time + (15 * 60) - time.time() if analyzer and analyzer.last_reconnect_time else 0
     })
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
+    return jsonify({
+        "status": "healthy", 
+        "timestamp": datetime.now().isoformat(),
+        "connected": analyzer.connected if analyzer else False
+    })
 
 @app.route('/signals')
 def signals():
@@ -412,6 +464,14 @@ def signals():
         "history": analyzer.signals_history[-10:] if analyzer.signals_history else [],
         "total_signals": len(analyzer.signals_history)
     })
+
+@app.route('/reconnect')
+def manual_reconnect():
+    if not analyzer:
+        return jsonify({"error": "Analyzer not initialized"})
+    
+    analyzer.last_reconnect_time = 0  # Forzar reconexión inmediata
+    return jsonify({"status": "reconnection_triggered", "message": "Se forzará la reconexión en el próximo ciclo"})
 
 def cleanup():
     print("🛑 Cerrando conexiones...")
