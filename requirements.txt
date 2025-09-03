@@ -1,4 +1,5 @@
 websocket-client
 numpy
-pip install TA-Lib
+pandas
+pandas-ta
 requests
