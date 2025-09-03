@@ -3,31 +3,30 @@ import json
 import threading
 import time
 import numpy as np
-from talib_alternative import EMA, RSI, ATR
+import talib
 from datetime import datetime
 import ssl
 from collections import deque
 import requests
-import os
 
 class BOOM1000CandleAnalyzer:
-    def __init__(self, token=None, app_id="88258", telegram_token=None, telegram_chat_id=None):
+    def __init__(self, token, app_id="88258", telegram_token=None, telegram_chat_id=None):
         # --- Configuración de Conexión ---
         self.ws_url = f"wss://ws.derivws.com/websockets/v3?app_id={app_id}"
-        self.token = token or os.environ.get('TOKEN', 'a1-m63zGttjKYP6vUq8SIJdmySH8d3Jc')
+        self.token = token
         self.ws = None
         self.connected = False
         self.authenticated = False
 
         # --- Configuración de Telegram ---
-        self.telegram_token = telegram_token or os.environ.get('TELEGRAM_BOT_TOKEN', '')
-        self.telegram_chat_id = telegram_chat_id or os.environ.get('TELEGRAM_CHAT_ID', '')
-        self.telegram_enabled = bool(self.telegram_token and self.telegram_chat_id)
+        self.telegram_token = telegram_token
+        self.telegram_chat_id = telegram_chat_id
+        self.telegram_enabled = telegram_token is not None and telegram_chat_id is not None
 
         # --- Configuración de Trading ---
         self.symbol = "BOOM1000"
         self.candle_interval_seconds = 60
-        self.min_candles = 50
+        self.min_candles = 1
 
         # --- Parámetros de la Estrategia ---
         self.ema_fast_period = 9
@@ -87,13 +86,7 @@ class BOOM1000CandleAnalyzer:
         })
         wst.daemon = True
         wst.start()
-        
-        # Esperar conexión con timeout
-        timeout = 30
-        start_time = time.time()
-        while not self.connected and (time.time() - start_time) < timeout:
-            time.sleep(0.5)
-        
+        time.sleep(5)
         return self.connected
 
     def on_open(self, ws):
@@ -110,19 +103,16 @@ class BOOM1000CandleAnalyzer:
         print(f"❌ Error WebSocket: {error}")
 
     def on_message(self, ws, message):
-        try:
-            data = json.loads(message)
-            if "error" in data:
-                print(f"❌ Error: {data['error'].get('message', 'Error desconocido')}")
-                return
-            if "authorize" in data:
-                self.authenticated = True
-                print("✅ Autenticación exitosa.")
-                self.subscribe_to_ticks()
-            elif "tick" in data:
-                self.handle_tick(data['tick'])
-        except Exception as e:
-            print(f"❌ Error procesando mensaje: {e}")
+        data = json.loads(message)
+        if "error" in data:
+            print(f"❌ Error: {data['error'].get('message', 'Error desconocido')}")
+            return
+        if "authorize" in data:
+            self.authenticated = True
+            print("✅ Autenticación exitosa.")
+            self.subscribe_to_ticks()
+        elif "tick" in data:
+            self.handle_tick(data['tick'])
 
     def subscribe_to_ticks(self):
         print(f"📊 Suscribiendo a ticks de {self.symbol}...")
@@ -170,7 +160,7 @@ class BOOM1000CandleAnalyzer:
 
     def analyze_market(self):
         if len(self.candles) < self.min_candles:
-            print(f"⏳ Recopilando velas iniciales: {len(self.candles)}/{self.min_candles}")
+            print(f"\r⏳ Recopilando velas iniciales: {len(self.candles)}/{self.min_candles}", end="")
             return
 
         opens = np.array([c['open'] for c in self.candles], dtype=float)
@@ -296,20 +286,20 @@ class BOOM1000CandleAnalyzer:
                     time.sleep(1)
             except KeyboardInterrupt:
                 print("\n🛑 Deteniendo analizador...")
-            except Exception as e:
-                print(f"❌ Error inesperado: {e}")
         else:
             print("❌ No se pudo conectar a Deriv")
 
 # --- Ejecución ---
 if __name__ == "__main__":
-    # Obtener variables de entorno
-    DEMO_TOKEN = os.environ.get('TOKEN', 'a1-m63zGttjKYP6vUq8SIJdmySH8d3Jc')
-    TELEGRAM_BOT_TOKEN = os.environ.get('7868591681:AAGYeuSUwozg3xTi1zmxPx9gWRP2xsXP0Uc', '')
-    TELEGRAM_CHAT_ID = os.environ.get('-1003028922957', '')
+    # Reemplaza con tu token real si es necesario
+    DEMO_TOKEN = "a1-m63zGttjKYP6vUq8SIJdmySH8d3Jc"
+
+    # Configuración de Telegram (reemplaza con tus datos reales)
+    TELEGRAM_BOT_TOKEN = "7868591681:AAGYeuSUwozg3xTi1zmxPx9gWRP2xsXP0Uc"  # Ejemplo: "123456789:AAFmC4f5gH6IjK7L8m9n0oP1qR2sT3uV4wX"
+    TELEGRAM_CHAT_ID = "-1003028922957"  # El ID que proporcionaste
 
     analyzer = BOOM1000CandleAnalyzer(
-        token=DEMO_TOKEN,
+        DEMO_TOKEN,
         telegram_token=TELEGRAM_BOT_TOKEN,
         telegram_chat_id=TELEGRAM_CHAT_ID
     )
