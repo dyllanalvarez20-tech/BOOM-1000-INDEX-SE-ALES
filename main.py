@@ -22,6 +22,7 @@ class BOOM1000CandleAnalyzer:
         self.connected = False
         self.authenticated = False
         self.last_reconnect_time = time.time()
+        self.service_url = "https://boom-1000-index-se-ales.onrender.com"
 
         # --- Configuración de Telegram ---
         self.telegram_token = telegram_token
@@ -31,7 +32,7 @@ class BOOM1000CandleAnalyzer:
         # --- Configuración de Trading ---
         self.symbol = "BOOM1000"
         self.candle_interval_seconds = 60
-        self.min_candles = 50
+        self.min_candles = 1
 
         # --- Parámetros de la Estrategia ---
         self.ema_fast_period = 9
@@ -57,6 +58,17 @@ class BOOM1000CandleAnalyzer:
         # Iniciar en un hilo separado
         self.thread = threading.Thread(target=self.run_analyzer, daemon=True)
         self.thread.start()
+
+    def self_ping(self):
+        """Función para hacerse ping a sí mismo y evitar que Render duerma el servicio"""
+        try:
+            health_url = f"{self.service_url}/health"
+            response = requests.get(health_url, timeout=10)
+            print(f"✅ Self-ping exitoso: {response.status_code}")
+            return True
+        except Exception as e:
+            print(f"❌ Error en self-ping: {e}")
+            return False
 
     # --- Métodos para calcular indicadores manualmente ---
     def calculate_ema(self, prices, period):
@@ -393,21 +405,31 @@ class BOOM1000CandleAnalyzer:
 
         print("="*60)
 
-        # Bucle principal con reconexión automática
+        # Bucle principal con reconexión automática y auto-ping
         reconnect_interval = 15 * 60  # 15 minutos en segundos
+        ping_interval = 10 * 60       # 10 minutos en segundos (antes de que Render duerma)
         
+        last_ping_time = time.time()
+        last_reconnect_time = time.time()
+
         while True:
             try:
                 current_time = time.time()
                 
+                # Auto-ping cada 10 minutos para evitar que Render duerma el servicio
+                if current_time - last_ping_time >= ping_interval:
+                    print("🔄 Realizando auto-ping para mantener servicio activo...")
+                    self.self_ping()
+                    last_ping_time = current_time
+                
                 # Reconectar cada 15 minutos o si no está conectado
-                if not self.connected or current_time - self.last_reconnect_time >= reconnect_interval:
+                if not self.connected or current_time - last_reconnect_time >= reconnect_interval:
                     if self.connected:
                         print("🔄 Reconexión programada (cada 15 minutos)...")
                         self.disconnect()
                         time.sleep(2)
                     
-                    self.last_reconnect_time = current_time
+                    last_reconnect_time = current_time
                     
                     if self.connect():
                         print("✅ Reconexión exitosa")
@@ -421,11 +443,15 @@ class BOOM1000CandleAnalyzer:
                         print("❌ No se pudo conectar, reintentando en 30 segundos...")
                         time.sleep(30)
                 else:
-                    # Esperar hasta que sea tiempo de reconectar
-                    time_until_reconnect = reconnect_interval - (current_time - self.last_reconnect_time)
-                    if time_until_reconnect > 0:
-                        print(f"⏰ Próxima reconexión en {time_until_reconnect/60:.1f} minutos")
-                        time.sleep(min(60, time_until_reconnect))  # Esperar máximo 1 minuto
+                    # Esperar hasta que sea tiempo de reconectar o hacer ping
+                    next_action = min(
+                        reconnect_interval - (current_time - last_reconnect_time),
+                        ping_interval - (current_time - last_ping_time)
+                    )
+                    if next_action > 0:
+                        sleep_time = min(60, next_action)  # Esperar máximo 1 minuto
+                        print(f"⏰ Próxima acción en {sleep_time:.0f} segundos")
+                        time.sleep(sleep_time)
                     
             except Exception as e:
                 print(f"❌ Error crítico en run_analyzer: {e}")
@@ -443,7 +469,7 @@ def home():
         "connected": analyzer.connected if analyzer else False,
         "last_signal": analyzer.last_signal if analyzer else None,
         "total_candles": len(analyzer.candles) if analyzer else 0,
-        "next_reconnect": analyzer.last_reconnect_time + (15 * 60) - time.time() if analyzer and analyzer.last_reconnect_time else 0
+        "next_reconnect": analyzer.last_reconnect_time + (15 * 60) - time.time() if analyzer and hasattr(analyzer, 'last_reconnect_time') else 0
     })
 
 @app.route('/health')
