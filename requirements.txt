@@ -1,4 +1,4 @@
 websocket-client
 numpy
-TA-Lib-binary
+pip install TA-Lib
 requests
