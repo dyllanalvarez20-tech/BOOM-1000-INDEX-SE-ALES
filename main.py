@@ -8,34 +8,21 @@ from datetime import datetime
 import ssl
 from collections import deque
 import requests
-import logging
-import sys
-
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger("BOOM1000Bot")
+import os
 
 class BOOM1000CandleAnalyzer:
-    def __init__(self, token, app_id="88258", telegram_token=None, telegram_chat_id=None):
+    def __init__(self, token=None, app_id="88258", telegram_token=None, telegram_chat_id=None):
         # --- Configuración de Conexión ---
         self.ws_url = f"wss://ws.derivws.com/websockets/v3?app_id={app_id}"
-        self.token = token
+        self.token = token or os.environ.get('TOKEN', 'a1-m63zGttjKYP6vUq8SIJdmySH8d3Jc')
         self.ws = None
         self.connected = False
         self.authenticated = False
-        self.reconnect_attempts = 0
-        self.max_reconnect_attempts = 10
-        
+
         # --- Configuración de Telegram ---
-        self.telegram_token = telegram_token
-        self.telegram_chat_id = telegram_chat_id
-        self.telegram_enabled = telegram_token is not None and telegram_chat_id is not None
+        self.telegram_token = telegram_token or os.environ.get('TELEGRAM_BOT_TOKEN', '')
+        self.telegram_chat_id = telegram_chat_id or os.environ.get('TELEGRAM_CHAT_ID', '')
+        self.telegram_enabled = bool(self.telegram_token and self.telegram_chat_id)
 
         # --- Configuración de Trading ---
         self.symbol = "BOOM1000"
@@ -64,9 +51,9 @@ class BOOM1000CandleAnalyzer:
     # --- Método para enviar mensajes a Telegram ---
     def send_telegram_message(self, message):
         if not self.telegram_enabled:
-            logger.info("Telegram no está configurado. No se enviará mensaje.")
+            print("❌ Telegram no está configurado. No se enviará mensaje.")
             return False
-            
+
         try:
             url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
             payload = {
@@ -76,18 +63,18 @@ class BOOM1000CandleAnalyzer:
             }
             response = requests.post(url, json=payload, timeout=10)
             if response.status_code == 200:
-                logger.info("Señal enviada a Telegram")
+                print("✅ Señal enviada a Telegram")
                 return True
             else:
-                logger.error(f"Error al enviar a Telegram: {response.status_code} - {response.text}")
+                print(f"❌ Error al enviar a Telegram: {response.status_code} - {response.text}")
                 return False
         except Exception as e:
-            logger.error(f"Excepción al enviar a Telegram: {e}")
+            print(f"❌ Excepción al enviar a Telegram: {e}")
             return False
 
-    # --- Métodos de Conexión Mejorados ---
+    # --- Métodos de Conexión ---
     def connect(self):
-        logger.info("Conectando a Deriv API...")
+        print("🌐 Conectando a Deriv API...")
         self.ws = websocket.WebSocketApp(
             self.ws_url,
             on_open=self.on_open,
@@ -96,71 +83,51 @@ class BOOM1000CandleAnalyzer:
             on_close=self.on_close
         )
         wst = threading.Thread(target=self.ws.run_forever, kwargs={
-            'sslopt': {"cert_reqs": ssl.CERT_NONE}, 
-            'ping_interval': 30, 
-            'ping_timeout': 10,
-            'reconnect': 5  # Intentar reconectar automáticamente
+            'sslopt': {"cert_reqs": ssl.CERT_NONE}, 'ping_interval': 30, 'ping_timeout': 10
         })
         wst.daemon = True
         wst.start()
         
-        # Esperar a que la conexión se establezca con timeout
+        # Esperar conexión con timeout
         timeout = 30
         start_time = time.time()
         while not self.connected and (time.time() - start_time) < timeout:
-            time.sleep(1)
-            
-        if self.connected:
-            logger.info("Conexión establecida exitosamente")
-            return True
-        else:
-            logger.error("Timeout al conectar con Deriv API")
-            return False
+            time.sleep(0.5)
+        
+        return self.connected
 
     def on_open(self, ws):
-        logger.info("Conexión WebSocket abierta")
+        print("✅ Conexión abierta")
         self.connected = True
-        self.reconnect_attempts = 0  # Resetear contador de reconexiones
         ws.send(json.dumps({"authorize": self.token}))
 
     def on_close(self, ws, close_status_code, close_msg):
-        logger.warning(f"Conexión cerrada: {close_status_code} - {close_msg}")
+        print("🔌 Conexión cerrada")
         self.connected = False
         self.authenticated = False
-        
-        # Intentar reconectar después de un delay
-        if self.reconnect_attempts < self.max_reconnect_attempts:
-            self.reconnect_attempts += 1
-            reconnect_delay = min(2 ** self.reconnect_attempts, 60)  # Exponential backoff
-            logger.info(f"Reconectando en {reconnect_delay} segundos (intento {self.reconnect_attempts}/{self.max_reconnect_attempts})")
-            time.sleep(reconnect_delay)
-            self.connect()
 
     def on_error(self, ws, error):
-        logger.error(f"Error WebSocket: {error}")
+        print(f"❌ Error WebSocket: {error}")
 
     def on_message(self, ws, message):
         try:
             data = json.loads(message)
             if "error" in data:
-                logger.error(f"Error: {data['error'].get('message', 'Error desconocido')}")
+                print(f"❌ Error: {data['error'].get('message', 'Error desconocido')}")
                 return
             if "authorize" in data:
-                if data["authorize"].get("error"):
-                    logger.error(f"Error de autenticación: {data['authorize']['error']['message']}")
-                    return
                 self.authenticated = True
-                logger.info("Autenticación exitosa.")
+                print("✅ Autenticación exitosa.")
                 self.subscribe_to_ticks()
             elif "tick" in data:
                 self.handle_tick(data['tick'])
         except Exception as e:
-            logger.error(f"Error procesando mensaje: {e}")
+            print(f"❌ Error procesando mensaje: {e}")
 
     def subscribe_to_ticks(self):
-        logger.info(f"Suscribiendo a ticks de {self.symbol}...")
+        print(f"📊 Suscribiendo a ticks de {self.symbol}...")
         self.ws.send(json.dumps({"ticks": self.symbol, "subscribe": 1}))
-        logger.info("Recopilando datos para formar la primera vela...")
+        print("⏳ Recopilando datos para formar la primera vela...")
 
     def handle_tick(self, tick):
         try:
@@ -179,7 +146,7 @@ class BOOM1000CandleAnalyzer:
             self.ticks_for_current_candle.append(price)
 
         except Exception as e:
-            logger.error(f"Error en handle_tick: {e}")
+            print(f"❌ Error en handle_tick: {e}")
 
     def _finalize_candle(self):
         if not self.ticks_for_current_candle:
@@ -199,11 +166,11 @@ class BOOM1000CandleAnalyzer:
         self.new_candle_ready = True
 
         if len(self.candles) >= self.min_candles:
-            logger.info(f"Nueva vela cerrada. Total: {len(self.candles)}. Precio Cierre: {candle['close']:.2f}")
+            print(f"🕯️ Nueva vela cerrada. Total: {len(self.candles)}. Precio Cierre: {candle['close']:.2f}")
 
     def analyze_market(self):
         if len(self.candles) < self.min_candles:
-            logger.info(f"Recopilando velas iniciales: {len(self.candles)}/{self.min_candles}")
+            print(f"⏳ Recopilando velas iniciales: {len(self.candles)}/{self.min_candles}")
             return
 
         opens = np.array([c['open'] for c in self.candles], dtype=float)
@@ -218,7 +185,7 @@ class BOOM1000CandleAnalyzer:
             rsi = talib.RSI(closes, timeperiod=self.rsi_period)
             atr = talib.ATR(highs, lows, closes, timeperiod=self.atr_period)
         except Exception as e:
-            logger.error(f"Error calculando indicadores: {e}")
+            print(f"❌ Error calculando indicadores: {e}")
             return
 
         last_close = closes[-1]
@@ -246,7 +213,7 @@ class BOOM1000CandleAnalyzer:
         if signal:
             self.last_signal_time = current_time
             self.display_signal(signal, last_close, last_atr, rsi[-1])
-            
+
             # Enviar señal a Telegram
             if self.telegram_enabled:
                 telegram_msg = self.format_telegram_message(signal, last_close, last_atr, rsi[-1])
@@ -261,7 +228,7 @@ class BOOM1000CandleAnalyzer:
             sl = price + (atr_value * self.sl_atr_multiplier)
             tp = price - (atr_value * self.tp_atr_multiplier)
             direction_emoji = "📉"
-            
+
         message = f"""
 🚀 <b>SEÑAL DE TRADING - BOOM 1000</b> 🚀
 
@@ -292,66 +259,58 @@ class BOOM1000CandleAnalyzer:
 
         reset_code = "\033[0m"
 
-        logger.info("\n" + "="*60)
-        logger.info(f"🎯 {color_code}NUEVA SEÑAL DE TRADING - BOOM 1000{reset_code}")
-        logger.info("="*60)
-        logger.info(f"   📈 Dirección: {color_code}{direction}{reset_code}")
-        logger.info(f"   💰 Precio de Entrada: {price:.2f}")
-        logger.info(f"   🎯 Take Profit (TP): {tp:.2f} (Basado en ATR x{self.tp_atr_multiplier})")
-        logger.info(f"   🛑 Stop Loss (SL): {sl:.2f} (Basado en ATR x{self.sl_atr_multiplier})")
-        logger.info(f"   ⏰ Hora: {datetime.now().strftime('%H:%M:%S')}")
-        logger.info(f"   📊 Info: RSI={rsi_value:.1f}, ATR={atr_value:.2f}")
-        logger.info("="*60)
+        print("\n" + "="*60)
+        print(f"🎯 {color_code}NUEVA SEÑAL DE TRADING - BOOM 1000{reset_code}")
+        print("="*60)
+        print(f"   📈 Dirección: {color_code}{direction}{reset_code}")
+        print(f"   💰 Precio de Entrada: {price:.2f}")
+        print(f"   🎯 Take Profit (TP): {tp:.2f} (Basado en ATR x{self.tp_atr_multiplier})")
+        print(f"   🛑 Stop Loss (SL): {sl:.2f} (Basado en ATR x{self.sl_atr_multiplier})")
+        print(f"   ⏰ Hora: {datetime.now().strftime('%H:%M:%S')}")
+        print(f"   📊 Info: RSI={rsi_value:.1f}, ATR={atr_value:.2f}")
+        print("="*60)
 
     def run(self):
-        logger.info("\n" + "="*60)
-        logger.info("🤖 ANALIZADOR BOOM 1000 v2.0 - ESTRATEGIA DE VELAS")
-        logger.info("="*60)
-        logger.info("🧠 ESTRATEGIA:")
-        logger.info(f"   • Análisis en velas de {self.candle_interval_seconds} segundos.")
-        logger.info(f"   • Filtro de tendencia con EMA {self.ema_trend_period}.")
-        logger.info(f"   • Entrada por cruce de EMAs {self.ema_fast_period}/{self.ema_slow_period}.")
-        logger.info(f"   • TP/SL dinámico con ATR({self.atr_period}) x{self.tp_atr_multiplier}/{self.sl_atr_multiplier}.")
-        
-        if self.telegram_enabled:
-            logger.info("   📱 Notificaciones Telegram: ACTIVADAS")
-        else:
-            logger.info("   📱 Notificaciones Telegram: DESACTIVADAS")
-            
-        logger.info("="*60)
+        print("\n" + "="*60)
+        print("🤖 ANALIZADOR BOOM 1000 v2.0 - ESTRATEGIA DE VELAS")
+        print("="*60)
+        print("🧠 ESTRATEGIA:")
+        print(f"   • Análisis en velas de {self.candle_interval_seconds} segundos.")
+        print(f"   • Filtro de tendencia con EMA {self.ema_trend_period}.")
+        print(f"   • Entrada por cruce de EMAs {self.ema_fast_period}/{self.ema_slow_period}.")
+        print(f"   • TP/SL dinámico con ATR({self.atr_period}) x{self.tp_atr_multiplier}/{self.sl_atr_multiplier}.")
 
-        while True:
-            if self.connect():
-                try:
-                    while self.connected:
-                        if self.new_candle_ready:
-                            self.analyze_market()
-                            self.new_candle_ready = False
-                        time.sleep(1)
-                except Exception as e:
-                    logger.error(f"Error en el bucle principal: {e}")
-                    time.sleep(10)  # Esperar antes de reintentar
-            else:
-                logger.error("No se pudo conectar a Deriv. Reintentando en 30 segundos...")
-                time.sleep(30)
+        if self.telegram_enabled:
+            print("   📱 Notificaciones Telegram: ACTIVADAS")
+        else:
+            print("   📱 Notificaciones Telegram: DESACTIVADAS")
+
+        print("="*60)
+
+        if self.connect():
+            try:
+                while self.connected:
+                    if self.new_candle_ready:
+                        self.analyze_market()
+                        self.new_candle_ready = False
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                print("\n🛑 Deteniendo analizador...")
+            except Exception as e:
+                print(f"❌ Error inesperado: {e}")
+        else:
+            print("❌ No se pudo conectar a Deriv")
 
 # --- Ejecución ---
 if __name__ == "__main__":
-    # Obtener variables de entorno para Railway
-    import os
-    
-    DEMO_TOKEN = os.environ.get("DERIV_TOKEN", "a1-m63zGttjKYP6vUq8SIJdmySH8d3Jc")
-    TELEGRAM_BOT_TOKEN = os.environ.get("7868591681:AAGYeuSUwozg3xTi1zmxPx9gWRP2xsXP0Uc")
-    TELEGRAM_CHAT_ID = os.environ.get("-1003028922957")
-    
+    # Obtener variables de entorno
+    DEMO_TOKEN = os.environ.get('TOKEN', 'a1-m63zGttjKYP6vUq8SIJdmySH8d3Jc')
+    TELEGRAM_BOT_TOKEN = os.environ.get('7868591681:AAGYeuSUwozg3xTi1zmxPx9gWRP2xsXP0Uc', '')
+    TELEGRAM_CHAT_ID = os.environ.get('-1003028922957', '')
+
     analyzer = BOOM1000CandleAnalyzer(
-        DEMO_TOKEN, 
+        token=DEMO_TOKEN,
         telegram_token=TELEGRAM_BOT_TOKEN,
         telegram_chat_id=TELEGRAM_CHAT_ID
     )
-    
-    # Enviar mensaje de inicio a Telegram
-    if analyzer.telegram_enabled:
-        analyzer.send_telegram_message("🤖 <b>Bot de Trading BOOM1000 iniciado</b>\n\nEl bot está ahora funcionando 24/7 en Railway.")
-    
     analyzer.run()
