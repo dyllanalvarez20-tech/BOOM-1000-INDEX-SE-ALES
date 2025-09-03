@@ -3,3 +3,4 @@ numpy
 pandas
 pandas-ta
 requests
+setuptools>=68.0.0
