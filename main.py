@@ -341,8 +341,8 @@ if __name__ == "__main__":
     import os
     
     DEMO_TOKEN = os.environ.get("DERIV_TOKEN", "a1-m63zGttjKYP6vUq8SIJdmySH8d3Jc")
-    TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-    TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "-1003028922957")
+    TELEGRAM_BOT_TOKEN = os.environ.get("7868591681:AAGYeuSUwozg3xTi1zmxPx9gWRP2xsXP0Uc")
+    TELEGRAM_CHAT_ID = os.environ.get("-1003028922957")
     
     analyzer = BOOM1000CandleAnalyzer(
         DEMO_TOKEN, 
