@@ -3,7 +3,7 @@ import json
 import threading
 import time
 import numpy as np
-import talib
+from talib_alternative import EMA, RSI, ATR
 from datetime import datetime
 import ssl
 from collections import deque
