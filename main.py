@@ -406,7 +406,7 @@ class BOOM1000CandleAnalyzer:
         print("="*60)
 
         # Bucle principal con reconexión automática y auto-ping
-        reconnect_interval = 15 * 60  # 15 minutos en segundos
+        reconnect_interval = 10 * 60  # 15 minutos en segundos
         ping_interval = 10 * 60       # 10 minutos en segundos (antes de que Render duerma)
         
         last_ping_time = time.time()
