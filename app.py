@@ -8,7 +8,7 @@ app = Flask(__name__)
 def run_bot():
     try:
         print("🤖 Iniciando bot de trading...")
-        subprocess.run(["python", "main.py"])  # ← COMILLAS DOBLES CORRECTAS
+        subprocess.run(["python", "main.py"])
     except Exception as e:
         print(f"❌ Error en bot: {e}")
 
