@@ -3,7 +3,7 @@ import json
 import threading
 import time
 import numpy as np
-import pandas_ta as ta
+import pandas as pd
 from datetime import datetime
 import ssl
 from collections import deque
@@ -46,6 +46,78 @@ class BOOM1000CandleAnalyzer:
         # --- Estado de Señales ---
         self.last_signal_time = 0
         self.signal_cooldown = self.candle_interval_seconds * 2
+
+    # --- Métodos para calcular indicadores manualmente ---
+    def calculate_ema(self, prices, period):
+        """Calcula EMA manualmente"""
+        if len(prices) < period:
+            return np.array([np.nan] * len(prices))
+        
+        ema = np.zeros(len(prices))
+        k = 2 / (period + 1)
+        
+        # Primer valor EMA es SMA simple
+        ema[period-1] = np.mean(prices[:period])
+        
+        # Calcular EMA para los valores restantes
+        for i in range(period, len(prices)):
+            ema[i] = (prices[i] * k) + (ema[i-1] * (1 - k))
+        
+        return ema
+
+    def calculate_rsi(self, prices, period=14):
+        """Calcula RSI manualmente"""
+        if len(prices) < period + 1:
+            return np.array([np.nan] * len(prices))
+        
+        deltas = np.diff(prices)
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+        
+        avg_gain = np.zeros(len(prices))
+        avg_loss = np.zeros(len(prices))
+        rsi = np.zeros(len(prices))
+        
+        # Valores iniciales
+        avg_gain[period] = np.mean(gains[:period])
+        avg_loss[period] = np.mean(losses[:period])
+        
+        for i in range(period + 1, len(prices)):
+            avg_gain[i] = (avg_gain[i-1] * (period - 1) + gains[i-1]) / period
+            avg_loss[i] = (avg_loss[i-1] * (period - 1) + losses[i-1]) / period
+        
+        for i in range(period, len(prices)):
+            if avg_loss[i] == 0:
+                rsi[i] = 100
+            else:
+                rs = avg_gain[i] / avg_loss[i]
+                rsi[i] = 100 - (100 / (1 + rs))
+        
+        return rsi
+
+    def calculate_atr(self, highs, lows, closes, period=14):
+        """Calcula ATR manualmente"""
+        if len(highs) < period + 1:
+            return np.array([np.nan] * len(highs))
+        
+        tr = np.zeros(len(highs))
+        atr = np.zeros(len(highs))
+        
+        # Calcular True Range
+        for i in range(1, len(highs)):
+            hl = highs[i] - lows[i]
+            hc = abs(highs[i] - closes[i-1])
+            lc = abs(lows[i] - closes[i-1])
+            tr[i] = max(hl, hc, lc)
+        
+        # Primer ATR es el promedio simple de los primeros period TR
+        atr[period] = np.mean(tr[1:period+1])
+        
+        # Calcular ATR para los valores restantes
+        for i in range(period + 1, len(highs)):
+            atr[i] = (atr[i-1] * (period - 1) + tr[i]) / period
+        
+        return atr
 
     # --- Método para enviar mensajes a Telegram ---
     def send_telegram_message(self, message):
@@ -163,25 +235,32 @@ class BOOM1000CandleAnalyzer:
             print(f"\r⏳ Recopilando velas iniciales: {len(self.candles)}/{self.min_candles}", end="")
             return
 
-        # Crear DataFrame con los datos de las velas
-        df = self.create_dataframe()
-        
+        # Extraer arrays de numpy
+        opens = np.array([c['open'] for c in self.candles], dtype=float)
+        highs = np.array([c['high'] for c in self.candles], dtype=float)
+        lows = np.array([c['low'] for c in self.candles], dtype=float)
+        closes = np.array([c['close'] for c in self.candles], dtype=float)
+
         try:
-            # Calcular indicadores con pandas_ta
-            df['ema_fast'] = ta.ema(df['close'], length=self.ema_fast_period)
-            df['ema_slow'] = ta.ema(df['close'], length=self.ema_slow_period)
-            df['ema_trend'] = ta.ema(df['close'], length=self.ema_trend_period)
-            df['rsi'] = ta.rsi(df['close'], length=self.rsi_period)
-            df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=self.atr_period)
+            # Calcular indicadores manualmente
+            ema_fast = self.calculate_ema(closes, self.ema_fast_period)
+            ema_slow = self.calculate_ema(closes, self.ema_slow_period)
+            ema_trend = self.calculate_ema(closes, self.ema_trend_period)
+            rsi = self.calculate_rsi(closes, self.rsi_period)
+            atr = self.calculate_atr(highs, lows, closes, self.atr_period)
         except Exception as e:
             print(f"❌ Error calculando indicadores: {e}")
             return
 
-        last_close = df['close'].iloc[-1]
-        last_atr = df['atr'].iloc[-1]
+        # Verificar si tenemos suficientes datos para análisis
+        if np.isnan(ema_fast[-1]) or np.isnan(ema_slow[-1]) or np.isnan(rsi[-1]) or np.isnan(atr[-1]):
+            return
 
-        is_uptrend = df['ema_fast'].iloc[-1] > df['ema_slow'].iloc[-1] and df['ema_slow'].iloc[-1] > df['ema_trend'].iloc[-1]
-        is_downtrend = df['ema_fast'].iloc[-1] < df['ema_slow'].iloc[-1] and df['ema_slow'].iloc[-1] < df['ema_trend'].iloc[-1]
+        last_close = closes[-1]
+        last_atr = atr[-1]
+
+        is_uptrend = ema_fast[-1] > ema_slow[-1] and ema_slow[-1] > ema_trend[-1]
+        is_downtrend = ema_fast[-1] < ema_slow[-1] and ema_slow[-1] < ema_trend[-1]
 
         signal = None
         current_time = time.time()
@@ -190,39 +269,23 @@ class BOOM1000CandleAnalyzer:
             return
 
         # Señal de COMPRA (BUY)
-        if is_uptrend and df['ema_fast'].iloc[-2] <= df['ema_slow'].iloc[-2] and df['ema_fast'].iloc[-1] > df['ema_slow'].iloc[-1]:
-            if df['rsi'].iloc[-1] > 40 and df['rsi'].iloc[-1] < 70:
+        if is_uptrend and ema_fast[-2] <= ema_slow[-2] and ema_fast[-1] > ema_slow[-1]:
+            if rsi[-1] > 40 and rsi[-1] < 70:
                 signal = "BUY"
 
         # Señal de VENTA (SELL)
-        if is_downtrend and df['ema_fast'].iloc[-2] >= df['ema_slow'].iloc[-2] and df['ema_fast'].iloc[-1] < df['ema_slow'].iloc[-1]:
-            if df['rsi'].iloc[-1] < 60 and df['rsi'].iloc[-1] > 30:
+        if is_downtrend and ema_fast[-2] >= ema_slow[-2] and ema_fast[-1] < ema_slow[-1]:
+            if rsi[-1] < 60 and rsi[-1] > 30:
                 signal = "SELL"
 
         if signal:
             self.last_signal_time = current_time
-            self.display_signal(signal, last_close, last_atr, df['rsi'].iloc[-1])
+            self.display_signal(signal, last_close, last_atr, rsi[-1])
 
             # Enviar señal a Telegram
             if self.telegram_enabled:
-                telegram_msg = self.format_telegram_message(signal, last_close, last_atr, df['rsi'].iloc[-1])
+                telegram_msg = self.format_telegram_message(signal, last_close, last_atr, rsi[-1])
                 self.send_telegram_message(telegram_msg)
-
-    def create_dataframe(self):
-        """Crea un DataFrame pandas a partir de las velas almacenadas"""
-        import pandas as pd
-        
-        data = {
-            'timestamp': [c['timestamp'] for c in self.candles],
-            'open': [c['open'] for c in self.candles],
-            'high': [c['high'] for c in self.candles],
-            'low': [c['low'] for c in self.candles],
-            'close': [c['close'] for c in self.candles],
-            'volume': [c['volume'] for c in self.candles]
-        }
-        
-        df = pd.DataFrame(data)
-        return df
 
     def format_telegram_message(self, direction, price, atr_value, rsi_value):
         if direction == "BUY":
@@ -310,8 +373,8 @@ if __name__ == "__main__":
     DEMO_TOKEN = "a1-m63zGttjKYP6vUq8SIJdmySH8d3Jc"
 
     # Configuración de Telegram (reemplaza con tus datos reales)
-    TELEGRAM_BOT_TOKEN = "7868591681:AAGYeuSUwozg3xTi1zmxPx9gWRP2xsXP0Uc"  # Ejemplo: "123456789:AAFmC4f5gH6IjK7L8m9n0oP1qR2sT3uV4wX"
-    TELEGRAM_CHAT_ID = "-1003028922957"  # El ID que proporcionaste
+    TELEGRAM_BOT_TOKEN = "7868591681:AAGYeuSUwozg3xTi1zmxPx9gWRP2xsXP0Uc"
+    TELEGRAM_CHAT_ID = "-1003028922957"
 
     analyzer = BOOM1000CandleAnalyzer(
         DEMO_TOKEN,
