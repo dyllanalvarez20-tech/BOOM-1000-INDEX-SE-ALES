@@ -8,6 +8,10 @@ from datetime import datetime
 import ssl
 from collections import deque
 import requests
+from flask import Flask, jsonify
+import atexit
+
+app = Flask(__name__)
 
 class BOOM1000CandleAnalyzer:
     def __init__(self, token, app_id="88258", telegram_token=None, telegram_chat_id=None):
@@ -46,6 +50,12 @@ class BOOM1000CandleAnalyzer:
         # --- Estado de Señales ---
         self.last_signal_time = 0
         self.signal_cooldown = self.candle_interval_seconds * 2
+        self.last_signal = None
+        self.signals_history = []
+
+        # Iniciar en un hilo separado
+        self.thread = threading.Thread(target=self.run_analyzer, daemon=True)
+        self.thread.start()
 
     # --- Métodos para calcular indicadores manualmente ---
     def calculate_ema(self, prices, period):
@@ -280,6 +290,15 @@ class BOOM1000CandleAnalyzer:
 
         if signal:
             self.last_signal_time = current_time
+            self.last_signal = {
+                'direction': signal,
+                'price': last_close,
+                'atr': last_atr,
+                'rsi': rsi[-1],
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            self.signals_history.append(self.last_signal)
+            
             self.display_signal(signal, last_close, last_atr, rsi[-1])
 
             # Enviar señal a Telegram
@@ -338,7 +357,7 @@ class BOOM1000CandleAnalyzer:
         print(f"   📊 Info: RSI={rsi_value:.1f}, ATR={atr_value:.2f}")
         print("="*60)
 
-    def run(self):
+    def run_analyzer(self):
         print("\n" + "="*60)
         print("🤖 ANALIZADOR BOOM 1000 v2.0 - ESTRATEGIA DE VELAS")
         print("="*60)
@@ -367,18 +386,53 @@ class BOOM1000CandleAnalyzer:
         else:
             print("❌ No se pudo conectar a Deriv")
 
-# --- Ejecución ---
-if __name__ == "__main__":
-    # Reemplaza con tu token real si es necesario
-    DEMO_TOKEN = "a1-m63zGttjKYP6vUq8SIJdmySH8d3Jc"
+# Crear instancia global del analizador
+analyzer = None
 
-    # Configuración de Telegram (reemplaza con tus datos reales)
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "running",
+        "service": "BOOM 1000 Analyzer",
+        "last_signal": analyzer.last_signal if analyzer else None,
+        "total_candles": len(analyzer.candles) if analyzer else 0
+    })
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
+
+@app.route('/signals')
+def signals():
+    if not analyzer:
+        return jsonify({"error": "Analyzer not initialized"})
+    
+    return jsonify({
+        "last_signal": analyzer.last_signal,
+        "history": analyzer.signals_history[-10:] if analyzer.signals_history else [],
+        "total_signals": len(analyzer.signals_history)
+    })
+
+def cleanup():
+    print("🛑 Cerrando conexiones...")
+    if analyzer and analyzer.ws:
+        analyzer.ws.close()
+
+atexit.register(cleanup)
+
+if __name__ == "__main__":
+    # Configuración
+    DEMO_TOKEN = "a1-m63zGttjKYP6vUq8SIJdmySH8d3Jc"
     TELEGRAM_BOT_TOKEN = "7868591681:AAGYeuSUwozg3xTi1zmxPx9gWRP2xsXP0Uc"
     TELEGRAM_CHAT_ID = "-1003028922957"
 
+    # Inicializar analizador
     analyzer = BOOM1000CandleAnalyzer(
         DEMO_TOKEN,
         telegram_token=TELEGRAM_BOT_TOKEN,
         telegram_chat_id=TELEGRAM_CHAT_ID
     )
-    analyzer.run()
+    
+    # Iniciar servidor Flask
+    print("🚀 Iniciando servidor Flask...")
+    app.run(host='0.0.0.0', port=10000, debug=False)
