@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: boom-1000-index
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app
+    plan: free
