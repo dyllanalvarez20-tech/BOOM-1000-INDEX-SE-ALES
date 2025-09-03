@@ -3,7 +3,7 @@ import json
 import threading
 import time
 import numpy as np
-import talib
+import pandas_ta as ta
 from datetime import datetime
 import ssl
 from collections import deque
@@ -163,26 +163,25 @@ class BOOM1000CandleAnalyzer:
             print(f"\r⏳ Recopilando velas iniciales: {len(self.candles)}/{self.min_candles}", end="")
             return
 
-        opens = np.array([c['open'] for c in self.candles], dtype=float)
-        highs = np.array([c['high'] for c in self.candles], dtype=float)
-        lows = np.array([c['low'] for c in self.candles], dtype=float)
-        closes = np.array([c['close'] for c in self.candles], dtype=float)
-
+        # Crear DataFrame con los datos de las velas
+        df = self.create_dataframe()
+        
         try:
-            ema_fast = talib.EMA(closes, timeperiod=self.ema_fast_period)
-            ema_slow = talib.EMA(closes, timeperiod=self.ema_slow_period)
-            ema_trend = talib.EMA(closes, timeperiod=self.ema_trend_period)
-            rsi = talib.RSI(closes, timeperiod=self.rsi_period)
-            atr = talib.ATR(highs, lows, closes, timeperiod=self.atr_period)
+            # Calcular indicadores con pandas_ta
+            df['ema_fast'] = ta.ema(df['close'], length=self.ema_fast_period)
+            df['ema_slow'] = ta.ema(df['close'], length=self.ema_slow_period)
+            df['ema_trend'] = ta.ema(df['close'], length=self.ema_trend_period)
+            df['rsi'] = ta.rsi(df['close'], length=self.rsi_period)
+            df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=self.atr_period)
         except Exception as e:
             print(f"❌ Error calculando indicadores: {e}")
             return
 
-        last_close = closes[-1]
-        last_atr = atr[-1]
+        last_close = df['close'].iloc[-1]
+        last_atr = df['atr'].iloc[-1]
 
-        is_uptrend = ema_fast[-1] > ema_slow[-1] and ema_slow[-1] > ema_trend[-1]
-        is_downtrend = ema_fast[-1] < ema_slow[-1] and ema_slow[-1] < ema_trend[-1]
+        is_uptrend = df['ema_fast'].iloc[-1] > df['ema_slow'].iloc[-1] and df['ema_slow'].iloc[-1] > df['ema_trend'].iloc[-1]
+        is_downtrend = df['ema_fast'].iloc[-1] < df['ema_slow'].iloc[-1] and df['ema_slow'].iloc[-1] < df['ema_trend'].iloc[-1]
 
         signal = None
         current_time = time.time()
@@ -191,23 +190,39 @@ class BOOM1000CandleAnalyzer:
             return
 
         # Señal de COMPRA (BUY)
-        if is_uptrend and ema_fast[-2] <= ema_slow[-2] and ema_fast[-1] > ema_slow[-1]:
-            if rsi[-1] > 40 and rsi[-1] < 70:
+        if is_uptrend and df['ema_fast'].iloc[-2] <= df['ema_slow'].iloc[-2] and df['ema_fast'].iloc[-1] > df['ema_slow'].iloc[-1]:
+            if df['rsi'].iloc[-1] > 40 and df['rsi'].iloc[-1] < 70:
                 signal = "BUY"
 
         # Señal de VENTA (SELL)
-        if is_downtrend and ema_fast[-2] >= ema_slow[-2] and ema_fast[-1] < ema_slow[-1]:
-            if rsi[-1] < 60 and rsi[-1] > 30:
+        if is_downtrend and df['ema_fast'].iloc[-2] >= df['ema_slow'].iloc[-2] and df['ema_fast'].iloc[-1] < df['ema_slow'].iloc[-1]:
+            if df['rsi'].iloc[-1] < 60 and df['rsi'].iloc[-1] > 30:
                 signal = "SELL"
 
         if signal:
             self.last_signal_time = current_time
-            self.display_signal(signal, last_close, last_atr, rsi[-1])
+            self.display_signal(signal, last_close, last_atr, df['rsi'].iloc[-1])
 
             # Enviar señal a Telegram
             if self.telegram_enabled:
-                telegram_msg = self.format_telegram_message(signal, last_close, last_atr, rsi[-1])
+                telegram_msg = self.format_telegram_message(signal, last_close, last_atr, df['rsi'].iloc[-1])
                 self.send_telegram_message(telegram_msg)
+
+    def create_dataframe(self):
+        """Crea un DataFrame pandas a partir de las velas almacenadas"""
+        import pandas as pd
+        
+        data = {
+            'timestamp': [c['timestamp'] for c in self.candles],
+            'open': [c['open'] for c in self.candles],
+            'high': [c['high'] for c in self.candles],
+            'low': [c['low'] for c in self.candles],
+            'close': [c['close'] for c in self.candles],
+            'volume': [c['volume'] for c in self.candles]
+        }
+        
+        df = pd.DataFrame(data)
+        return df
 
     def format_telegram_message(self, direction, price, atr_value, rsi_value):
         if direction == "BUY":
