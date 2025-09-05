@@ -32,7 +32,7 @@ class BOOM1000CandleAnalyzer:
         # --- Configuración de Trading ---
         self.symbol = "BOOM1000"
         self.candle_interval_seconds = 60
-        self.min_candles = 1
+        self.min_candles = 50
 
         # --- Parámetros de la Estrategia ---
         self.ema_fast_period = 9
