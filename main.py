@@ -40,8 +40,8 @@ class BOOM1000CandleAnalyzer:
         self.ema_trend_period = 50
         self.rsi_period = 14
         self.atr_period = 14
-        self.sl_atr_multiplier = 1.5
-        self.tp_atr_multiplier = 2.0
+        self.sl_atr_multiplier = 2.0
+        self.tp_atr_multiplier = 3.0
 
         # --- Almacenamiento de Datos ---
         self.ticks_for_current_candle = []
@@ -351,7 +351,6 @@ class BOOM1000CandleAnalyzer:
 🚀 <b>SEÑAL DE TRADING - BOOM 1000</b> 🚀
 
 {direction_emoji} <b>Dirección:</b> {direction}
-💰 <b>Precio Entrada:</b> {price:.2f}
 🎯 <b>Take Profit:</b> {tp:.2f}
 🛑 <b>Stop Loss:</b> {sl:.2f}
 
@@ -380,8 +379,7 @@ class BOOM1000CandleAnalyzer:
         print("\n" + "="*60)
         print(f"🎯 {color_code}NUEVA SEÑAL DE TRADING - BOOM 1000{reset_code}")
         print("="*60)
-        print(f"   📈 Dirección: {color_code}{direction}{reset_code}")
-        print(f"   💰 Precio de Entrada: {price:.2f}")
+        print(f"   📈 Dirección: {color_code}{direction}{reset_code}")   
         print(f"   🎯 Take Profit (TP): {tp:.2f} (Basado en ATR x{self.tp_atr_multiplier})")
         print(f"   🛑 Stop Loss (SL): {sl:.2f} (Basado en ATR x{self.sl_atr_multiplier})")
         print(f"   ⏰ Hora: {datetime.now().strftime('%H:%M:%S')}")
