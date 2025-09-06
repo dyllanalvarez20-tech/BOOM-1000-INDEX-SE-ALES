@@ -32,7 +32,7 @@ class BOOM1000CandleAnalyzer:
         # --- Configuración de Trading ---
         self.symbol = "BOOM1000"
         self.candle_interval_seconds = 60
-        self.min_candles = 50
+        self.min_candles = 1
 
         # --- Parámetros de la Estrategia ---
         self.ema_fast_period = 9
@@ -40,8 +40,8 @@ class BOOM1000CandleAnalyzer:
         self.ema_trend_period = 50
         self.rsi_period = 14
         self.atr_period = 14
-        self.sl_atr_multiplier = 2.0
-        self.tp_atr_multiplier = 3.0
+        self.sl_atr_multiplier = 1.5
+        self.tp_atr_multiplier = 2.0
 
         # --- Almacenamiento de Datos ---
         self.ticks_for_current_candle = []
@@ -141,6 +141,32 @@ class BOOM1000CandleAnalyzer:
             atr[i] = (atr[i-1] * (period - 1) + tr[i]) / period
         
         return atr
+
+    def calculate_support_resistance(self, closes, lookback=20):
+        """Calcula niveles de soporte y resistencia basados en máximos y mínimos recientes"""
+        if len(closes) < lookback:
+            return None, None
+        
+        # Encontrar máximos y mínimos locales
+        recent_data = closes[-lookback:]
+        resistance = np.max(recent_data)
+        support = np.min(recent_data)
+        
+        return support, resistance
+
+    def calculate_pivot_points(self, high, low, close):
+        """Calcula puntos pivote clásicos"""
+        pivot = (high + low + close) / 3
+        r1 = (2 * pivot) - low
+        s1 = (2 * pivot) - high
+        r2 = pivot + (high - low)
+        s2 = pivot - (high - low)
+        
+        return {
+            'pivot': pivot,
+            'r1': r1, 'r2': r2,
+            's1': s1, 's2': s2
+        }
 
     # --- Método para enviar mensajes a Telegram ---
     def send_telegram_message(self, message):
@@ -289,6 +315,16 @@ class BOOM1000CandleAnalyzer:
             ema_trend = self.calculate_ema(closes, self.ema_trend_period)
             rsi = self.calculate_rsi(closes, self.rsi_period)
             atr = self.calculate_atr(highs, lows, closes, self.atr_period)
+            
+            # Calcular niveles de soporte y resistencia
+            support, resistance = self.calculate_support_resistance(closes)
+            
+            # Calcular puntos pivote para la última vela
+            last_high = highs[-1]
+            last_low = lows[-1]
+            last_close = closes[-1]
+            pivot_points = self.calculate_pivot_points(last_high, last_low, last_close)
+            
         except Exception as e:
             print(f"❌ Error calculando indicadores: {e}")
             return
@@ -320,43 +356,127 @@ class BOOM1000CandleAnalyzer:
                 signal = "SELL"
 
         if signal:
+            # Análisis dinámico de TP/SL basado en múltiples factores
+            if signal == "BUY":
+                # Para compras, buscar resistencias cercanas como posibles TP
+                tp_candidates = []
+                
+                # 1. Resistencia más cercana
+                if resistance and resistance > last_close:
+                    tp_candidates.append(resistance)
+                
+                # 2. Niveles de pivote (R1, R2)
+                if pivot_points['r1'] > last_close:
+                    tp_candidates.append(pivot_points['r1'])
+                if pivot_points['r2'] > last_close:
+                    tp_candidates.append(pivot_points['r2'])
+                
+                # 3. TP basado en ATR si no hay niveles claros
+                atr_tp = last_close + (last_atr * self.tp_atr_multiplier)
+                tp_candidates.append(atr_tp)
+                
+                # Seleccionar el TP más conservador (más cercano)
+                dynamic_tp = min(tp_candidates) if tp_candidates else atr_tp
+                
+                # Análisis de SL
+                sl_candidates = []
+                
+                # 1. Soporte más cercano
+                if support and support < last_close:
+                    sl_candidates.append(support)
+                
+                # 2. Niveles de pivote (S1, S2)
+                if pivot_points['s1'] < last_close:
+                    sl_candidates.append(pivot_points['s1'])
+                if pivot_points['s2'] < last_close:
+                    sl_candidates.append(pivot_points['s2'])
+                
+                # 3. SL basado en ATR si no hay niveles claros
+                atr_sl = last_close - (last_atr * self.sl_atr_multiplier)
+                sl_candidates.append(atr_sl)
+                
+                # Seleccionar el SL más conservador (más cercano)
+                dynamic_sl = max(sl_candidates) if sl_candidates else atr_sl
+                
+            else:  # SELL
+                # Para ventas, buscar soportes cercanos como posibles TP
+                tp_candidates = []
+                
+                # 1. Soporte más cercano
+                if support and support < last_close:
+                    tp_candidates.append(support)
+                
+                # 2. Niveles de pivote (S1, S2)
+                if pivot_points['s1'] < last_close:
+                    tp_candidates.append(pivot_points['s1'])
+                if pivot_points['s2'] < last_close:
+                    tp_candidates.append(pivot_points['s2'])
+                
+                # 3. TP basado en ATR si no hay niveles claros
+                atr_tp = last_close - (last_atr * self.tp_atr_multiplier)
+                tp_candidates.append(atr_tp)
+                
+                # Seleccionar el TP más conservador (más cercano)
+                dynamic_tp = max(tp_candidates) if tp_candidates else atr_tp
+                
+                # Análisis de SL
+                sl_candidates = []
+                
+                # 1. Resistencia más cercana
+                if resistance and resistance > last_close:
+                    sl_candidates.append(resistance)
+                
+                # 2. Niveles de pivote (R1, R2)
+                if pivot_points['r1'] > last_close:
+                    sl_candidates.append(pivot_points['r1'])
+                if pivot_points['r2'] > last_close:
+                    sl_candidates.append(pivot_points['r2'])
+                
+                # 3. SL basado en ATR si no hay niveles claros
+                atr_sl = last_close + (last_atr * self.sl_atr_multiplier)
+                sl_candidates.append(atr_sl)
+                
+                # Seleccionar el SL más conservador (más cercano)
+                dynamic_sl = min(sl_candidates) if sl_candidates else atr_sl
+
             self.last_signal_time = current_time
             self.last_signal = {
                 'direction': signal,
                 'price': last_close,
+                'tp': dynamic_tp,
+                'sl': dynamic_sl,
                 'atr': last_atr,
                 'rsi': rsi[-1],
-                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'analysis_type': 'dynamic'
             }
             self.signals_history.append(self.last_signal)
             
-            self.display_signal(signal, last_close, last_atr, rsi[-1])
+            self.display_signal(signal, last_close, dynamic_tp, dynamic_sl, rsi[-1])
 
             # Enviar señal a Telegram
             if self.telegram_enabled:
-                telegram_msg = self.format_telegram_message(signal, last_close, last_atr, rsi[-1])
+                telegram_msg = self.format_telegram_message(signal, last_close, dynamic_tp, dynamic_sl, rsi[-1])
                 self.send_telegram_message(telegram_msg)
 
-    def format_telegram_message(self, direction, price, atr_value, rsi_value):
+    def format_telegram_message(self, direction, price, tp, sl, rsi_value):
         if direction == "BUY":
-            sl = price - (atr_value * self.sl_atr_multiplier)
-            tp = price + (atr_value * self.tp_atr_multiplier)
             direction_emoji = "📈"
         else:  # SELL
-            sl = price + (atr_value * self.sl_atr_multiplier)
-            tp = price - (atr_value * self.tp_atr_multiplier)
             direction_emoji = "📉"
 
         message = f"""
 🚀 <b>SEÑAL DE TRADING - BOOM 1000</b> 🚀
 
 {direction_emoji} <b>Dirección:</b> {direction}
+💰 <b>Precio Entrada:</b> {price:.2f}
 🎯 <b>Take Profit:</b> {tp:.2f}
 🛑 <b>Stop Loss:</b> {sl:.2f}
 
 📊 <b>Indicadores:</b>
    • RSI: {rsi_value:.1f}
-   • ATR: {atr_value:.2f}
+
+🔍 <b>Análisis:</b> TP/SL dinámicos basados en soportes/resistencias y ATR
 
 ⏰ <b>Hora:</b> {datetime.now().strftime('%H:%M:%S')}
 
@@ -364,14 +484,10 @@ class BOOM1000CandleAnalyzer:
 """
         return message
 
-    def display_signal(self, direction, price, atr_value, rsi_value):
+    def display_signal(self, direction, price, tp, sl, rsi_value):
         if direction == "BUY":
-            sl = price - (atr_value * self.sl_atr_multiplier)
-            tp = price + (atr_value * self.tp_atr_multiplier)
             color_code = "\033[92m"
         else:  # SELL
-            sl = price + (atr_value * self.sl_atr_multiplier)
-            tp = price - (atr_value * self.tp_atr_multiplier)
             color_code = "\033[91m"
 
         reset_code = "\033[0m"
@@ -379,11 +495,12 @@ class BOOM1000CandleAnalyzer:
         print("\n" + "="*60)
         print(f"🎯 {color_code}NUEVA SEÑAL DE TRADING - BOOM 1000{reset_code}")
         print("="*60)
-        print(f"   📈 Dirección: {color_code}{direction}{reset_code}")   
-        print(f"   🎯 Take Profit (TP): {tp:.2f} (Basado en ATR x{self.tp_atr_multiplier})")
-        print(f"   🛑 Stop Loss (SL): {sl:.2f} (Basado en ATR x{self.sl_atr_multiplier})")
+        print(f"   📈 Dirección: {color_code}{direction}{reset_code}")
+        print(f"   💰 Precio de Entrada: {price:.2f}")
+        print(f"   🎯 Take Profit (TP): {tp:.2f} (Dinámico - Basado en análisis)")
+        print(f"   🛑 Stop Loss (SL): {sl:.2f} (Dinámico - Basado en análisis)")
         print(f"   ⏰ Hora: {datetime.now().strftime('%H:%M:%S')}")
-        print(f"   📊 Info: RSI={rsi_value:.1f}, ATR={atr_value:.2f}")
+        print(f"   📊 Info: RSI={rsi_value:.1f}")
         print("="*60)
 
     def run_analyzer(self):
@@ -394,7 +511,7 @@ class BOOM1000CandleAnalyzer:
         print(f"   • Análisis en velas de {self.candle_interval_seconds} segundos.")
         print(f"   • Filtro de tendencia con EMA {self.ema_trend_period}.")
         print(f"   • Entrada por cruce de EMAs {self.ema_fast_period}/{self.ema_slow_period}.")
-        print(f"   • TP/SL dinámico con ATR({self.atr_period}) x{self.tp_atr_multiplier}/{self.sl_atr_multiplier}.")
+        print("   • TP/SL DINÁMICOS basados en soportes/resistencias y ATR")
 
         if self.telegram_enabled:
             print("   📱 Notificaciones Telegram: ACTIVADAS")
@@ -404,7 +521,7 @@ class BOOM1000CandleAnalyzer:
         print("="*60)
 
         # Bucle principal con reconexión automática y auto-ping
-        reconnect_interval = 10 * 60  # 15 minutos en segundos
+        reconnect_interval = 15 * 60  # 15 minutos en segundos
         ping_interval = 10 * 60       # 10 minutos en segundos (antes de que Render duerma)
         
         last_ping_time = time.time()
