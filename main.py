@@ -42,12 +42,6 @@ class BOOM1000CandleAnalyzer:
         self.atr_period = 14
         self.sl_atr_multiplier = 2.0
         self.tp_atr_multiplier = 3.0
-        
-        # --- Configuración de Trading Automático ---
-        self.trade_amount = 1  # Monto en USD por operación
-        self.contract_type = "CALL" if self.symbol == "BOOM1000" else "PUT"  # CALL para BOOM, PUT para CRASH
-        self.duration = 5  # Duración en ticks/velas
-        self.duration_unit = "t"  # 't' para ticks, 's' para segundos
 
         # --- Almacenamiento de Datos ---
         self.ticks_for_current_candle = []
@@ -60,7 +54,6 @@ class BOOM1000CandleAnalyzer:
         self.signal_cooldown = self.candle_interval_seconds * 2
         self.last_signal = None
         self.signals_history = []
-        self.trade_history = []
 
         # Iniciar en un hilo separado
         self.thread = threading.Thread(target=self.run_analyzer, daemon=True)
@@ -152,7 +145,7 @@ class BOOM1000CandleAnalyzer:
     # --- Método para enviar mensajes a Telegram ---
     def send_telegram_message(self, message):
         if not self.telegram_enabled:
-            print("⚠️ Telegram no está configurado. No se enviará mensaje.")
+            print("❌ Telegram no está configurado. No se enviará mensaje.")
             return False
 
         try:
@@ -175,7 +168,7 @@ class BOOM1000CandleAnalyzer:
 
     # --- Métodos de Conexión ---
     def connect(self):
-        print("🔗 Conectando a Deriv API...")
+        print("🌐 Conectando a Deriv API...")
         try:
             self.ws = websocket.WebSocketApp(
                 self.ws_url,
@@ -233,12 +226,6 @@ class BOOM1000CandleAnalyzer:
             self.subscribe_to_ticks()
         elif "tick" in data:
             self.handle_tick(data['tick'])
-        elif "proposal" in data:
-            # Respuesta a una propuesta de operación
-            self.handle_proposal_response(data)
-        elif "buy" in data:
-            # Respuesta a una operación de compra
-            self.handle_buy_response(data)
 
     def subscribe_to_ticks(self):
         print(f"📊 Suscribiendo a ticks de {self.symbol}...")
@@ -283,135 +270,6 @@ class BOOM1000CandleAnalyzer:
 
         if len(self.candles) >= self.min_candles:
             print(f"🕯️ Nueva vela cerrada. Total: {len(self.candles)}. Precio Cierre: {candle['close']:.2f}")
-
-    def open_trade(self, direction, price, atr_value):
-        """Abre una operación en Deriv basada en la señal"""
-        if not self.connected or not self.authenticated:
-            print("❌ No conectado o autenticado. No se puede abrir operación.")
-            return False
-
-        try:
-            # Determinar el tipo de contrato basado en la dirección
-            contract_type = "CALL" if direction == "BUY" else "PUT"
-            
-            # Calcular stop loss y take profit
-            if direction == "BUY":
-                stop_loss = price - (atr_value * self.sl_atr_multiplier)
-                take_profit = price + (atr_value * self.tp_atr_multiplier)
-            else:  # SELL
-                stop_loss = price + (atr_value * self.sl_atr_multiplier)
-                take_profit = price - (atr_value * self.tp_atr_multiplier)
-
-            # Primero obtener una propuesta
-            proposal_req = {
-                "proposal": 1,
-                "amount": self.trade_amount,
-                "basis": "stake",
-                "contract_type": contract_type,
-                "currency": "USD",
-                "duration": self.duration,
-                "duration_unit": self.duration_unit,
-                "symbol": self.symbol,
-                "barrier": "+0.1"  # Pequeña barrera para opciones digitais
-            }
-            
-            print(f"📨 Enviando propuesta para {direction}...")
-            self.ws.send(json.dumps(proposal_req))
-            
-            # Registrar la operación pendiente
-            trade_info = {
-                "direction": direction,
-                "request_price": price,
-                "stop_loss": stop_loss,
-                "take_profit": take_profit,
-                "contract_type": contract_type,
-                "amount": self.trade_amount,
-                "timestamp": datetime.now().isoformat(),
-                "status": "pending"
-            }
-            
-            self.trade_history.append(trade_info)
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error al abrir operación: {e}")
-            return False
-
-    def handle_proposal_response(self, data):
-        """Maneja la respuesta de una propuesta"""
-        try:
-            if "error" in data:
-                print(f"❌ Error en propuesta: {data['error']['message']}")
-                return
-                
-            proposal = data['proposal']
-            proposal_id = proposal['id']
-            ask_price = proposal['ask_price']
-            
-            print(f"✅ Propuesta recibida. ID: {proposal_id}, Precio: {ask_price}")
-            
-            # Comprar la propuesta
-            buy_req = {
-                "buy": proposal_id,
-                "price": ask_price
-            }
-            
-            self.ws.send(json.dumps(buy_req))
-            
-        except Exception as e:
-            print(f"❌ Error manejando respuesta de propuesta: {e}")
-
-    def handle_buy_response(self, data):
-        """Maneja la respuesta de una compra"""
-        try:
-            if "error" in data:
-                print(f"❌ Error en compra: {data['error']['message']}")
-                # Actualizar el estado de la última operación
-                if self.trade_history:
-                    self.trade_history[-1]["status"] = "error"
-                    self.trade_history[-1]["error"] = data['error']['message']
-                return
-                
-            contract = data['buy']
-            contract_id = contract['contract_id']
-            buy_price = contract['buy_price']
-            
-            print(f"✅ Operación exitosa. Contrato ID: {contract_id}, Precio: {buy_price}")
-            
-            # Actualizar el estado de la última operación
-            if self.trade_history:
-                self.trade_history[-1]["status"] = "open"
-                self.trade_history[-1]["contract_id"] = contract_id
-                self.trade_history[-1]["buy_price"] = buy_price
-                
-            # Enviar confirmación a Telegram si está habilitado
-            if self.telegram_enabled and self.trade_history:
-                trade = self.trade_history[-1]
-                telegram_msg = self.format_trade_confirmation(trade)
-                self.send_telegram_message(telegram_msg)
-                
-        except Exception as e:
-            print(f"❌ Error manejando respuesta de compra: {e}")
-
-    def format_trade_confirmation(self, trade):
-        """Formatea el mensaje de confirmación de operación para Telegram"""
-        direction_emoji = "📈" if trade["direction"] == "BUY" else "📉"
-        
-        message = f"""
-🎯 <b>OPERACIÓN ABIERTA - BOOM 1000</b> 🎯
-
-{direction_emoji} <b>Dirección:</b> {trade["direction"]}
-💰 <b>Monto:</b> ${trade["amount"]}
-🔢 <b>Contrato ID:</b> {trade.get("contract_id", "N/A")}
-📊 <b>Precio Entrada:</b> {trade.get("buy_price", trade["request_price"]):.2f}
-🎯 <b>Take Profit:</b> {trade["take_profit"]:.2f}
-🛑 <b>Stop Loss:</b> {trade["stop_loss"]:.2f}
-
-🕐 <b>Hora:</b> {datetime.now().strftime('%H:%M:%S')}
-
-#Trading #Operación #BOOM1000
-"""
-        return message
 
     def analyze_market(self):
         if len(self.candles) < self.min_candles:
@@ -474,13 +332,6 @@ class BOOM1000CandleAnalyzer:
             
             self.display_signal(signal, last_close, last_atr, rsi[-1])
 
-            # Abrir operación automáticamente
-            trade_opened = self.open_trade(signal, last_close, last_atr)
-            if trade_opened:
-                print(f"✅ Operación {signal} enviada para ejecución")
-            else:
-                print(f"❌ No se pudo enviar la operación {signal}")
-
             # Enviar señal a Telegram
             if self.telegram_enabled:
                 telegram_msg = self.format_telegram_message(signal, last_close, last_atr, rsi[-1])
@@ -497,19 +348,18 @@ class BOOM1000CandleAnalyzer:
             direction_emoji = "📉"
 
         message = f"""
-🎯 <b>SEÑAL DE TRADING - BOOM 1000</b> 🎯
+🚀 <b>SEÑAL DE TRADING - BOOM 1000</b> 🚀
 
 {direction_emoji} <b>Dirección:</b> {direction}
-💰 <b>Monto:</b> ${self.trade_amount}
-📊 <b>Precio Entrada:</b> {price:.2f}
+💰 <b>Precio Entrada:</b> {price:.2f}
 🎯 <b>Take Profit:</b> {tp:.2f}
 🛑 <b>Stop Loss:</b> {sl:.2f}
 
-📈 <b>Indicadores:</b>
+📊 <b>Indicadores:</b>
    • RSI: {rsi_value:.1f}
    • ATR: {atr_value:.2f}
 
-🕐 <b>Hora:</b> {datetime.now().strftime('%H:%M:%S')}
+⏰ <b>Hora:</b> {datetime.now().strftime('%H:%M:%S')}
 
 #Trading #Señal #BOOM1000
 """
@@ -531,25 +381,22 @@ class BOOM1000CandleAnalyzer:
         print(f"🎯 {color_code}NUEVA SEÑAL DE TRADING - BOOM 1000{reset_code}")
         print("="*60)
         print(f"   📈 Dirección: {color_code}{direction}{reset_code}")
-        print(f"   💰 Monto: ${self.trade_amount}")
-        print(f"   📊 Precio de Entrada: {price:.2f}")
+        print(f"   💰 Precio de Entrada: {price:.2f}")
         print(f"   🎯 Take Profit (TP): {tp:.2f} (Basado en ATR x{self.tp_atr_multiplier})")
         print(f"   🛑 Stop Loss (SL): {sl:.2f} (Basado en ATR x{self.sl_atr_multiplier})")
-        print(f"   🕐 Hora: {datetime.now().strftime('%H:%M:%S')}")
-        print(f"   📈 Info: RSI={rsi_value:.1f}, ATR={atr_value:.2f}")
+        print(f"   ⏰ Hora: {datetime.now().strftime('%H:%M:%S')}")
+        print(f"   📊 Info: RSI={rsi_value:.1f}, ATR={atr_value:.2f}")
         print("="*60)
 
     def run_analyzer(self):
         print("\n" + "="*60)
         print("🤖 ANALIZADOR BOOM 1000 v2.0 - ESTRATEGIA DE VELAS")
         print("="*60)
-        print("🎯 ESTRATEGIA:")
+        print("🧠 ESTRATEGIA:")
         print(f"   • Análisis en velas de {self.candle_interval_seconds} segundos.")
         print(f"   • Filtro de tendencia con EMA {self.ema_trend_period}.")
         print(f"   • Entrada por cruce de EMAs {self.ema_fast_period}/{self.ema_slow_period}.")
         print(f"   • TP/SL dinámico con ATR({self.atr_period}) x{self.tp_atr_multiplier}/{self.sl_atr_multiplier}.")
-        print(f"   • Trading automático: ACTIVADO")
-        print(f"   • Monto por operación: ${self.trade_amount}")
 
         if self.telegram_enabled:
             print("   📱 Notificaciones Telegram: ACTIVADAS")
@@ -571,14 +418,14 @@ class BOOM1000CandleAnalyzer:
                 
                 # Auto-ping cada 10 minutos para evitar que Render duerma el servicio
                 if current_time - last_ping_time >= ping_interval:
-                    print("🔔 Realizando auto-ping para mantener servicio activo...")
+                    print("🔄 Realizando auto-ping para mantener servicio activo...")
                     self.self_ping()
                     last_ping_time = current_time
                 
                 # Reconectar cada 15 minutos o si no está conectado
                 if not self.connected or current_time - last_reconnect_time >= reconnect_interval:
                     if self.connected:
-                        print("🔔 Reconexión programada (cada 15 minutos)...")
+                        print("🔄 Reconexión programada (cada 15 minutos)...")
                         self.disconnect()
                         time.sleep(2)
                     
@@ -603,12 +450,12 @@ class BOOM1000CandleAnalyzer:
                     )
                     if next_action > 0:
                         sleep_time = min(60, next_action)  # Esperar máximo 1 minuto
-                        print(f"⏳ Próxima acción en {sleep_time:.0f} segundos")
+                        print(f"⏰ Próxima acción en {sleep_time:.0f} segundos")
                         time.sleep(sleep_time)
                     
             except Exception as e:
                 print(f"❌ Error crítico en run_analyzer: {e}")
-                print("🔔 Reintentando en 30 segundos...")
+                print("🔄 Reintentando en 30 segundos...")
                 time.sleep(30)
 
 # Crear instancia global del analizador
@@ -622,7 +469,6 @@ def home():
         "connected": analyzer.connected if analyzer else False,
         "last_signal": analyzer.last_signal if analyzer else None,
         "total_candles": len(analyzer.candles) if analyzer else 0,
-        "total_trades": len(analyzer.trade_history) if analyzer else 0,
         "next_reconnect": analyzer.last_reconnect_time + (15 * 60) - time.time() if analyzer and hasattr(analyzer, 'last_reconnect_time') else 0
     })
 
@@ -643,16 +489,6 @@ def signals():
         "last_signal": analyzer.last_signal,
         "history": analyzer.signals_history[-10:] if analyzer.signals_history else [],
         "total_signals": len(analyzer.signals_history)
-    })
-
-@app.route('/trades')
-def trades():
-    if not analyzer:
-        return jsonify({"error": "Analyzer not initialized"})
-    
-    return jsonify({
-        "trade_history": analyzer.trade_history[-10:] if analyzer.trade_history else [],
-        "total_trades": len(analyzer.trade_history)
     })
 
 @app.route('/reconnect')
@@ -684,5 +520,5 @@ if __name__ == "__main__":
     )
     
     # Iniciar servidor Flask
-    print("🌐 Iniciando servidor Flask...")
+    print("🚀 Iniciando servidor Flask...")
     app.run(host='0.0.0.0', port=10000, debug=False)
